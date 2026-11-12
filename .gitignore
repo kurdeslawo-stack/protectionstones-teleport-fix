@@ -1,0 +1,5 @@
+/integration/build/
+/integration/__pycache__/
+/protectionstones-build/
+/upstream-build/
+/.maven-local/

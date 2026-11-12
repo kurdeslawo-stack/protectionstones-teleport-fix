@@ -1,3 +1,21 @@
+diff --git a/pom.xml b/pom.xml
+index 9d033ae..012ac36 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -110,6 +110,13 @@
+                 <version>3.3.0</version>
+                 <configuration>
+                     <minimizeJar>true</minimizeJar>
++                    <artifactSet>
++                        <excludes>
++                            <!-- json-simple brings test libraries into the compile dependency graph. -->
++                            <exclude>junit:junit</exclude>
++                            <exclude>org.hamcrest:hamcrest-core</exclude>
++                        </excludes>
++                    </artifactSet>
+                     <relocations>
+                         <relocation>
+                             <pattern>org.bstats</pattern>
 diff --git a/src/main/java/dev/espi/protectionstones/PSCommand.java b/src/main/java/dev/espi/protectionstones/PSCommand.java
 index 43d3a9b..5adfa70 100644
 --- a/src/main/java/dev/espi/protectionstones/PSCommand.java

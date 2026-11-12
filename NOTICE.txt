@@ -1,0 +1,12 @@
+Unofficial modification of ProtectionStones 2.10.6.
+Upstream project: https://github.com/espidev/ProtectionStones
+Upstream source commit: 7701764b5cda7db4ef59d1c99252ac7cc19c98f8
+
+Modified on 2026-11-12: serialize teleport timer registration and
+cancellation on the server thread and bind cleanup to the owning task.
+The shaded artifact excludes transitive JUnit and Hamcrest test libraries.
+The modified ProtectionStones code is distributed under GPL version 3
+or later, with the original copyright and license notices retained.
+
+Release and corresponding source:
+https://github.com/kurdeslawo-stack/protectionstones-teleport-fix/releases/tag/v2.10.6-teleport-fix.1

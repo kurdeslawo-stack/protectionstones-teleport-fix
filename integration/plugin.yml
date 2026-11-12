@@ -1,0 +1,9 @@
+name: PsHomeScenarios
+version: 1.0.0
+main: audit.protectionstones.PsHomeScenarios
+api-version: '26.3'
+depend: [ProtectionStones, FakePlayerPlugin]
+softdepend: [PsHomeTrace]
+commands:
+  pshometest:
+    description: Runs synthetic teleport cases on the isolated qa_world.

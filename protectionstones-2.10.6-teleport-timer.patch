@@ -1,0 +1,244 @@
+diff --git a/src/main/java/dev/espi/protectionstones/PSCommand.java b/src/main/java/dev/espi/protectionstones/PSCommand.java
+index 43d3a9b..5adfa70 100644
+--- a/src/main/java/dev/espi/protectionstones/PSCommand.java
++++ b/src/main/java/dev/espi/protectionstones/PSCommand.java
+@@ -16,6 +16,7 @@
+ package dev.espi.protectionstones;
+ 
+ import dev.espi.protectionstones.commands.*;
++import org.bukkit.Bukkit;
+ import org.bukkit.ChatColor;
+ import org.bukkit.command.Command;
+ import org.bukkit.command.CommandSender;
+@@ -57,7 +58,9 @@ public class PSCommand extends Command {
+         ProtectionStones.getInstance().addCommandArgument(new ArgToggle());
+         ProtectionStones.getInstance().addCommandArgument(new ArgToggle.ArgToggleOn());
+         ProtectionStones.getInstance().addCommandArgument(new ArgToggle.ArgToggleOff());
+-        ProtectionStones.getInstance().addCommandArgument(new ArgTp());
++        ArgTp teleport = new ArgTp();
++        ProtectionStones.getInstance().addCommandArgument(teleport);
++        Bukkit.getPluginManager().registerEvents(teleport, ProtectionStones.getInstance());
+         ProtectionStones.getInstance().addCommandArgument(new ArgUnclaim());
+         ProtectionStones.getInstance().addCommandArgument(new ArgView());
+         ProtectionStones.getInstance().addCommandArgument(new ArgHelp());
+diff --git a/src/main/java/dev/espi/protectionstones/commands/ArgTp.java b/src/main/java/dev/espi/protectionstones/commands/ArgTp.java
+index 5261ffc..8cf4d75 100644
+--- a/src/main/java/dev/espi/protectionstones/commands/ArgTp.java
++++ b/src/main/java/dev/espi/protectionstones/commands/ArgTp.java
+@@ -23,14 +23,19 @@ import org.bukkit.ChatColor;
+ import org.bukkit.Location;
+ import org.bukkit.command.CommandSender;
+ import org.bukkit.entity.Player;
+-import org.bukkit.scheduler.BukkitTask;
++import org.bukkit.event.EventHandler;
++import org.bukkit.event.Listener;
++import org.bukkit.event.player.PlayerQuitEvent;
++import org.bukkit.event.server.PluginDisableEvent;
++import org.bukkit.scheduler.BukkitRunnable;
+ 
+ import java.util.*;
+ 
+-public class ArgTp implements PSCommandArg {
++public class ArgTp implements PSCommandArg, Listener {
+ 
+-    private static HashMap<UUID, Integer> waitCounter = new HashMap<>();
+-    private static HashMap<UUID, BukkitTask> taskCounter = new HashMap<>();
++    private static final int CHECK_INTERVAL_TICKS = 5;
++    // Only accessed by the main thread.
++    private static final Map<UUID, PendingTeleport> pendingTeleports = new HashMap<>();
+ 
+     // /ps tp, /ps home
+ 
+@@ -128,76 +133,133 @@ public class ArgTp implements PSCommandArg {
+     }
+ 
+     static void teleportPlayer(Player p, PSRegion r) {
+-        if (r.getTypeOptions() == null) {
++        ProtectionStones plugin = ProtectionStones.getInstance();
++        if (!Bukkit.isPrimaryThread()) {
++            Bukkit.getScheduler().runTask(plugin, () -> teleportPlayer(p, r));
++            return;
++        }
++
++        UUID uuid = p.getUniqueId();
++        if (Bukkit.getPlayer(uuid) != p) {
++            return;
++        }
++        PSProtectBlock options = r.getTypeOptions();
++        if (options == null) {
+             PSL.msg(p, ChatColor.RED + "This region is problematic, and the block type (" + r.getType() + ") is not configured. Please contact an administrator.");
+             Bukkit.getLogger().info(ChatColor.RED + "This region is problematic, and the block type (" + r.getType() + ") is not configured.");
+             return;
+         }
+ 
+-        // teleport player
+-        if (r.getTypeOptions().tpWaitingSeconds == 0 || p.hasPermission("protectionstones.tp.bypasswait")) {
+-            // no teleport delay
+-            PSL.msg(p, PSL.TPING.msg());
+-            Bukkit.getScheduler().runTask(ProtectionStones.getInstance(), () -> p.teleport(r.getHome())); // run on main thread, not async
+-        } else if (!r.getTypeOptions().noMovingWhenTeleportWaiting) {
+-            // teleport delay, but doesn't care about moving
+-            p.sendMessage(PSL.TP_IN_SECONDS.msg().replace("%seconds%", "" + r.getTypeOptions().tpWaitingSeconds));
+-
+-            Bukkit.getScheduler().runTaskLater(ProtectionStones.getInstance(), () -> {
+-                PSL.msg(p, PSL.TPING.msg());
+-                p.teleport(r.getHome());
+-            }, 20 * r.getTypeOptions().tpWaitingSeconds);
+-
+-        } else {// delay and not allowed to move
+-            PSL.msg(p, PSL.TP_IN_SECONDS.msg().replace("%seconds%", "" + r.getTypeOptions().tpWaitingSeconds));
+-            Location l = p.getLocation().clone();
+-            UUID uuid = p.getUniqueId();
+-
+-            // remove queued teleport if already running
+-            if (taskCounter.get(uuid) != null) removeUUIDTimer(uuid);
+-
+-            // add teleport wait tasks to queue
+-            waitCounter.put(uuid, 0);
+-            taskCounter.put(uuid, Bukkit.getScheduler().runTaskTimer(ProtectionStones.getInstance(), () -> {
+-                        Player pl = Bukkit.getPlayer(uuid);
+-                        // cancel if the player is not on the server
+-                        if (pl == null) {
+-                            removeUUIDTimer(uuid);
+-                            return;
+-                        }
+-
+-                        if (waitCounter.get(uuid) == null) {
+-                            removeUUIDTimer(uuid);
+-                            return;
+-                        }
+-                        // increment seconds
+-                        waitCounter.put(uuid, waitCounter.get(uuid) + 1);
+-
+-                        ProtectionStones.getInstance().debug(String.format("Checking player movement. Player location: (%.2f, %.2f, %.2f), actual location: (%.2f, %.2f, %.2f)", pl.getLocation().getX(), pl.getLocation().getY(), pl.getLocation().getZ(), l.getX(), l.getY(), l.getZ()));
+-
+-                        // if the player moved cancel it
+-                        if (!inThreshold(l.getX(), pl.getLocation().getX()) || !inThreshold(l.getY(), pl.getLocation().getY()) || !inThreshold(l.getZ(), pl.getLocation().getZ())) {
+-                            ProtectionStones.getInstance().debug(String.format("Not in threshold. X check: %s, Y check: %s, Z check: %s", inThreshold(l.getX(), pl.getLocation().getX()), inThreshold(l.getY(), pl.getLocation().getY()), inThreshold(l.getZ(), pl.getLocation().getZ())));
+-                            PSL.msg(pl, PSL.TP_CANCELLED_MOVED.msg());
+-                            removeUUIDTimer(uuid);
+-                        } else if (waitCounter.get(uuid) == r.getTypeOptions().tpWaitingSeconds * 4) { // * 4 since this loops 4 times a second
+-                            // if the timer has passed, teleport and cancel
+-                            PSL.msg(pl, PSL.TPING.msg());
+-                            pl.teleport(r.getHome());
+-                            removeUUIDTimer(uuid);
+-                        }
+-                    }, 5, 5) // loop 4 times a second
+-            );
++        PendingTeleport previous = pendingTeleports.get(uuid);
++        if (previous != null) {
++            previous.finish();
+         }
++
++        int seconds = options.tpWaitingSeconds;
++        if (seconds == 0 || p.hasPermission("protectionstones.tp.bypasswait")) {
++            teleportNow(p, r);
++            return;
++        }
++
++        PSL.msg(p, PSL.TP_IN_SECONDS.msg().replace("%seconds%", String.valueOf(seconds)));
++        long delayTicks = 20L * seconds;
++        Location origin = options.noMovingWhenTeleportWaiting ? p.getLocation() : null;
++        PendingTeleport next = new PendingTeleport(p, r, origin, delayTicks / CHECK_INTERVAL_TICKS);
++        if (origin == null) {
++            next.runTaskLater(plugin, delayTicks);
++        } else {
++            next.runTaskTimer(plugin, CHECK_INTERVAL_TICKS, CHECK_INTERVAL_TICKS);
++        }
++        pendingTeleports.put(uuid, next);
++    }
++
++    @EventHandler
++    public void onPlayerQuit(PlayerQuitEvent event) {
++        Player player = event.getPlayer();
++        PendingTeleport pending = pendingTeleports.get(player.getUniqueId());
++        if (pending != null && pending.player == player) {
++            pending.finish();
++        }
++    }
++
++    @EventHandler
++    public void onPluginDisable(PluginDisableEvent event) {
++        if (event.getPlugin() == ProtectionStones.getInstance()) {
++            pendingTeleports.values().forEach(BukkitRunnable::cancel);
++            pendingTeleports.clear();
++        }
++    }
++
++    private static void teleportNow(Player player, PSRegion region) {
++        PSL.msg(player, PSL.TPING.msg());
++        player.teleport(region.getHome());
+     }
+ 
+     private static boolean inThreshold(double location, double playerLoc) {
+         return playerLoc <= location + 1.0 && playerLoc >= location - 1.0;
+     }
+ 
+-    private static void removeUUIDTimer(UUID uuid) {
+-        if (taskCounter.get(uuid) != null) taskCounter.get(uuid).cancel();
+-        waitCounter.remove(uuid);
+-        taskCounter.remove(uuid);
++    private static final class PendingTeleport extends BukkitRunnable {
++        private final Player player;
++        private final UUID uuid;
++        private final PSRegion region;
++        private final Location origin;
++        private long checksRemaining;
++
++        private PendingTeleport(Player player, PSRegion region, Location origin, long checksRemaining) {
++            this.player = player;
++            this.uuid = player.getUniqueId();
++            this.region = region;
++            this.origin = origin;
++            this.checksRemaining = checksRemaining;
++        }
++
++        @Override
++        public void run() {
++            try {
++                tick();
++            } catch (RuntimeException | Error failure) {
++                finish();
++                throw failure;
++            }
++        }
++
++        private void tick() {
++            if (pendingTeleports.get(uuid) != this || Bukkit.getPlayer(uuid) != player) {
++                finish();
++                return;
++            }
++            if (origin != null && movedOutsideThreshold()) {
++                finish();
++                PSL.msg(player, PSL.TP_CANCELLED_MOVED.msg());
++                return;
++            }
++            if (origin == null || --checksRemaining == 0) {
++                finish();
++                teleportNow(player, region);
++            }
++        }
++
++        private boolean movedOutsideThreshold() {
++            Location current = player.getLocation();
++            boolean x = inThreshold(origin.getX(), current.getX());
++            boolean y = inThreshold(origin.getY(), current.getY());
++            boolean z = inThreshold(origin.getZ(), current.getZ());
++            boolean moved = !x || !y || !z;
++            ProtectionStones plugin = ProtectionStones.getInstance();
++            if (plugin.isDebug()) {
++                plugin.debug(String.format("Checking player movement. Player location: (%.2f, %.2f, %.2f), actual location: (%.2f, %.2f, %.2f)",
++                        current.getX(), current.getY(), current.getZ(), origin.getX(), origin.getY(), origin.getZ()));
++                if (moved) {
++                    plugin.debug(String.format("Not in threshold. X check: %s, Y check: %s, Z check: %s", x, y, z));
++                }
++            }
++            return moved;
++        }
++
++        private void finish() {
++            pendingTeleports.remove(uuid, this);
++            cancel();
++        }
+     }
+ }
